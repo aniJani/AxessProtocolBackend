@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "aptos-unified-compute-backend"
+version = "0.1.0"
+description = "FastAPI caching layer & API gateway for AxessProtocol"
+authors = [{name = "Gemini AI"}]
+requires-python = ">=3.10"
+dependencies = [
+"fastapi>=0.111",
+"uvicorn[standard]>=0.30",
+"httpx>=0.27",
+"pydantic>=2.8",
+"python-dotenv>=1.0",
+"cachetools>=5.3",
+"orjson>=3.10",
+"loguru>=0.7",
+]
+
+
+[tool.uvicorn]
+factory = false
+host = "0.0.0.0"
+port = 8080
+reload = true
