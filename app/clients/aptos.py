@@ -7,7 +7,7 @@ from app.config import get_settings
 SET = get_settings()
 
 # Types stored on-chain (adjust to your deployed module addresses)
-MARKETPLACE_LISTING_TYPE = f"{SET.APTOS_MARKETPLACE_ADDRESS}::Marketplace::Listing"
+MARKETPLACE_LISTING_TYPE = f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::Listing"
 JOB_TYPE = f"{SET.APTOS_ESCROW_ADDRESS}::Escrow::Job"
 
 

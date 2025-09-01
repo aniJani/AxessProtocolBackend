@@ -48,3 +48,33 @@ class Job(BaseModel):
     total_escrow_amount: int
     claimed_amount: int
     status: Literal["active", "terminated", "completed"] = "active"
+
+
+# These models should mirror the structs in your Move contract
+class PhysicalSpecs(BaseModel):
+    gpu_model: str
+    cpu_cores: int
+    ram_gb: int
+
+
+class CloudDetails(BaseModel):
+    provider: str
+    instance_id: str
+    instance_type: str
+    region: str
+
+
+class Listing(BaseModel):
+    host_address: str
+    listing_type: str  # "Physical" or "Cloud"
+    price_per_second: int
+    is_available: bool
+    active_job_id: Optional[int] = None
+    physical: Optional[PhysicalSpecs] = None
+    cloud: Optional[CloudDetails] = None
+
+
+class ListingsPage(BaseModel):
+    items: List[Listing]
+    total: int
+    next_cursor: Optional[int] = None
