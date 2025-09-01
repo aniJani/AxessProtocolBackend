@@ -16,10 +16,10 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,       # Allow the origins listed above
-    allow_credentials=True,      # Allow cookies to be sent
-    allow_methods=["*"],         # Allow all HTTP methods (GET, POST, etc.)
-    allow_headers=["*"],         # Allow all HTTP headers
+    allow_origins=["*"],  # Allow the origins listed above
+    allow_credentials=True,  # Allow cookies to be sent
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all HTTP headers
 )
 
 app.include_router(health.router)
