@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from app.clients.aptos import aptos_client, MARKETPLACE_LISTING_TYPE
 from app.cache.memory_cache import cache_get, cache_set
-from app.models.schemas import Listing, ListingsPage
+from app.models.schemas import CloudDetails, Listing, ListingsPage, PhysicalSpecs
 from app.utils.pagination import paginate
 from app.config import get_settings
 from typing import List, Optional
@@ -56,41 +56,62 @@ SET = get_settings()
 
 
 async def _fetch_all_listings() -> List[Listing]:
-
+    """
+    Fetches all listings with the final parser and a fix for the
+    'list index out of range' error on active_job_id.
+    """
     cache_key = "all_listings_v1"
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
 
     KNOWN_HOSTS = [SET.APTOS_MARKETPLACE_ADDRESS]
-
     items: List[Listing] = []
+
     for host_address in KNOWN_HOSTS:
         try:
-            # Query each host for the specific Listing resource
             resource = await aptos_client.get_resource(
                 account=host_address,
                 typ=MARKETPLACE_LISTING_TYPE,
             )
 
-            # The raw data is nested under the 'data' key
+            if resource is None:
+                print(f"[DEBUG] No listing resource found for host {host_address}. Skipping.")
+                continue
+
+            # --- NEW DEBUG LOG ---
+            print(f"[DEBUG] Raw resource fetched from API: {resource}")
+
             raw_listing = resource.get("data", {})
             if not raw_listing:
                 continue
 
-            # Transform the raw on-chain data into our Pydantic 'Listing' model
-            listing_type_data = raw_listing.get("listing_type", {})
+            # --- NEW DEBUG LOG ---
+            print(f"[DEBUG] Extracted 'data' field: {raw_listing}")
 
+            listing_type_data = raw_listing.get("listing_type", {})
             listing_type = None
             physical_details = None
             cloud_details = None
 
-            if "Physical" in listing_type_data:
+            variant = listing_type_data.get("__variant__")
+
+            if variant == "Physical":
                 listing_type = "Physical"
-                physical_details = PhysicalSpecs(**listing_type_data["Physical"])
-            elif "Cloud" in listing_type_data:
+                physical_details = PhysicalSpecs(**listing_type_data.get("_0", {}))
+            elif variant == "Cloud":
                 listing_type = "Cloud"
-                cloud_details = CloudDetails(**listing_type_data["Cloud"])
+                cloud_details = CloudDetails(**listing_type_data.get("_0", {}))
+            
+            # --- THE CRITICAL BUG FIX IS HERE ---
+            active_job_id_data = raw_listing.get("active_job_id", {}).get("vec", [])
+            
+            # --- NEW DEBUG LOG ---
+            print(f"[DEBUG] 'active_job_id' vector data: {active_job_id_data}")
+
+            # If the vector is not empty, get the first element. Otherwise, it's None.
+            active_job_id = int(active_job_id_data[0]) if active_job_id_data else None
+            # --- END OF BUG FIX ---
 
             if listing_type:
                 items.append(
@@ -99,15 +120,18 @@ async def _fetch_all_listings() -> List[Listing]:
                         listing_type=listing_type,
                         price_per_second=int(raw_listing["price_per_second"]),
                         is_available=raw_listing["is_available"],
-                        active_job_id=raw_listing.get("active_job_id"),
+                        active_job_id=active_job_id,
                         physical=physical_details,
                         cloud=cloud_details,
                     )
                 )
+                print(f"[SUCCESS] Successfully parsed and added listing for host {host_address}")
 
         except Exception as e:
-            # This is expected if a host in our list doesn't have a listing
-            print(f"Could not fetch listing for host {host_address}: {e}")
+            # This will now give us a much more detailed error trace
+            import traceback
+            print(f"[!!!] AN UNEXPECTED ERROR OCCURRED for host {host_address}:")
+            traceback.print_exc()
             continue
 
     cache_set(cache_key, items)

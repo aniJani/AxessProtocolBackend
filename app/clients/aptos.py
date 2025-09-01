@@ -1,3 +1,4 @@
+# File: app/clients/aptos.py
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 import httpx
@@ -6,9 +7,8 @@ from app.config import get_settings
 
 SET = get_settings()
 
-# Types stored on-chain (adjust to your deployed module addresses)
+# We will keep this for later, but we will override it in the router for debugging
 MARKETPLACE_LISTING_TYPE = f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::Listing"
-JOB_TYPE = f"{SET.APTOS_ESCROW_ADDRESS}::Escrow::Job"
 
 
 class AptosClient:
@@ -24,6 +24,12 @@ class AptosClient:
 
     async def get_resource(self, account: str, typ: str) -> Optional[Dict[str, Any]]:
         url = f"/accounts/{account}/resource/{typ}"
+
+        # --- THIS IS THE NEW, CRITICAL DEBUGGING LINE ---
+        print(f"\n[!!!] MAKING REQUEST TO APTOS NODE:")
+        print(f"[!!!] URL: {self.base_url}{url}\n")
+        # --- END OF NEW DEBUGGING LINE ---
+
         r = await self.http.get(url)
         if r.status_code == 404:
             return None
