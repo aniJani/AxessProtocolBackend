@@ -59,3 +59,22 @@ async def get_job_details(job_id: int):
         # The most common error is that the job ID doesn't exist, which will cause a 404
         logging.error(f"Failed to get job {job_id}", exc_info=True)
         raise HTTPException(status_code=404, detail=f"Job with ID {job_id} not found.")
+    
+@router.post("/jobs/{job_id}/start", status_code=202)
+async def start_gpu_session(job_id: int):
+    """
+    (Placeholder) Sends a command to the relevant host agent to start a GPU container.
+    In Week 6, this will trigger a message to the Host Agent via a real-time channel.
+    """
+    logging.info(f"Received request to START job {job_id}.")
+    # The 202 Accepted status code is appropriate for an async operation
+    return {"status": "pending", "message": f"Start command issued for job {job_id}. Waiting for host agent to respond."}
+
+
+@router.post("/jobs/{job_id}/stop", status_code=202)
+async def stop_gpu_session(job_id: int):
+    """
+    (Placeholder) Sends a command to the relevant host agent to stop a GPU container.
+    """
+    logging.info(f"Received request to STOP job {job_id}.")
+    return {"status": "pending", "message": f"Stop command issued for job {job_id}. Waiting for host agent to respond."}
