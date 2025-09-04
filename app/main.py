@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import health, listings, hosts, jobs, ws
+from app.routers import health, listings, hosts, jobs, renters, ws
 from app.logging_config import logger
 
 app = FastAPI(
@@ -27,6 +27,7 @@ app.include_router(listings.router)
 app.include_router(hosts.router)
 app.include_router(jobs.router)
 app.include_router(ws.router) 
+app.include_router(renters.router)
 
 @app.on_event("startup")
 async def on_startup():
