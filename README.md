@@ -14,4 +14,4 @@ Copy `.env.example` to `.env` and set module addresses for Marketplace/Escrow on
 
 ## Run
 ```bash
-uvicorn app.main:app --reload --port 8080
+uvicorn app.main:app --reload --port 8000

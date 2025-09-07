@@ -1,56 +1,54 @@
-# File: app/routers/renters.py
-
 import logging
+import asyncio
 from typing import List
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+
 from app.models.schemas import Job
-from .jobs import get_job_details # We can re-use our existing function
+from .jobs import get_job_details
+# --- IMPORT THE LISTING FETCHER ---
+from .listings import _fetch_all_listings 
 
 router = APIRouter(prefix="/api/v1", tags=["renters"])
-
-# --- IMPORTANT NOTE ON FETCHING JOBS ---
-# The Aptos blockchain does not currently provide a simple way to ask:
-# "Give me all jobs created by this renter." Doing so would require an on-chain
-# index that we haven't built.
-#
-# Production Solutions:
-# 1. On-Chain: Add a resource to the renter's account that stores a list of their job IDs.
-# 2. Off-Chain (Recommended): Use an Aptos Indexer to listen for `rent_machine` events
-#    and store the `(renter_address, job_id)` mapping in a traditional database.
-#
-# For our current demo, we will simulate this by having the frontend tell us
-# which job IDs to look up, or we will use a mock list.
-
-# For now, we will keep a simple mock list. The frontend will be updated
-# to show how a real implementation would work.
-MOCK_RENTER_JOBS = {
-    # Replace with a real renter address from your tests
-    "0xRENTER_ADDRESS_HERE": [123, 124] 
-}
 
 @router.get("/renters/{renter_address}/jobs", response_model=List[Job])
 async def get_jobs_for_renter(renter_address: str):
     """
-    Fetches the details for all jobs associated with a specific renter.
-    (Currently using a mock list of job IDs for the demo).
+    Finds a renter's jobs by fetching all listings, finding the active jobs,
+    and then filtering by the renter's address.
+    
+    NOTE: This is a functional but less scalable approach than using an indexer.
+    It is suitable for a demo or early-stage application.
     """
-    logging.info(f"Fetching jobs for renter: {renter_address}")
+    logging.info(f"Fetching jobs for renter: {renter_address} by scanning all listings.")
+    renter_address_lower = renter_address.lower()
     
-    # In a real system, you would get these IDs from your indexer database.
-    job_ids = MOCK_RENTER_JOBS.get(renter_address.lower(), [])
-    
-    if not job_ids:
-        return []
+    try:
+        # 1. Fetch all listings on the entire marketplace.
+        all_listings = await _fetch_all_listings()
 
-    # Fetch details for each job ID in parallel
-    job_details_list = []
-    for job_id in job_ids:
-        try:
-            # Re-use the function we already built!
-            job_details = await get_job_details(job_id)
-            job_details_list.append(job_details)
-        except Exception:
-            logging.warning(f"Could not find details for job {job_id} for renter {renter_address}")
-            continue
-            
-    return job_details_list
+        # 2. Find all the job IDs from listings that are currently rented.
+        active_job_ids = []
+        for listing in all_listings:
+            if not listing.is_available and listing.active_job_id is not None:
+                active_job_ids.append(listing.active_job_id)
+
+        if not active_job_ids:
+            return [] # No rented machines means no active jobs.
+
+        # 3. Fetch the details for all those active jobs in parallel.
+        job_promises = [get_job_details(job_id) for job_id in active_job_ids]
+        job_results = await asyncio.gather(*job_promises, return_exceptions=True)
+
+        # 4. Filter the results to find jobs that belong to the target renter.
+        renter_jobs = []
+        for job in job_results:
+            if not isinstance(job, Exception) and job.renter_address.lower() == renter_address_lower:
+                renter_jobs.append(job)
+        
+        # This will return a list of the renter's ACTIVE jobs.
+        # It won't show their rental history yet.
+        return renter_jobs
+
+    except Exception as e:
+        logging.error(f"Error fetching jobs for renter {renter_address}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve renter jobs.")
