@@ -16,6 +16,7 @@ class ReputationScore(BaseModel):
 async def get_reputation(host_address: str):
     """
     Fetches the on-chain reputation score for a specific host.
+    Correctly handles the case where a host has no reputation yet.
     """
     try:
         payload = {
@@ -23,12 +24,19 @@ async def get_reputation(host_address: str):
             "type_arguments": [],
             "arguments": [host_address],
         }
-        # This view function returns an Option<ReputationScore>, which is a list with 0 or 1 elements
         response = await aptos_client.view(payload)
-        if response and response[0]:
-            # The data is inside the 'vec'[0] for an Option::Some
+
+        # --- THE FIX IS HERE ---
+        # 1. Check if the response and the nested 'vec' exist and are not empty.
+        if response and response[0] and response[0].get('vec') and len(response[0]['vec']) > 0:
+            # 2. Only if it's not empty, access the first element.
             return response[0]['vec'][0]
-        return None
+        else:
+            # 3. If the host has no reputation (the 'vec' is empty), return None (or null in JSON).
+            # This is the correct behavior for an Optional response model.
+            return None
+        # --- END FIX ---
+
     except Exception as e:
         logging.error(f"Failed to fetch reputation for {host_address}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error fetching reputation data.")

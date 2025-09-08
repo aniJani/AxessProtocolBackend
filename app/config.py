@@ -9,7 +9,7 @@ class Settings(BaseModel):
     )
     APTOS_MARKETPLACE_ADDRESS: str = os.getenv(
         "APTOS_MARKETPLACE_ADDRESS",
-        "0xd144f994fb413c68308e64805774d17ec9703cb4e125dfe19e655ffe209d18b4",
+        "0x13a2c0f46951e8462d6147bccacf163a61b4cb03b4e44f179d4621fd2468ca0a",
     )
     APTOS_ESCROW_ADDRESS: str = os.getenv("APTOS_ESCROW_ADDRESS", "0x...escrow")
     CACHE_TTL_SECONDS: int = int(os.getenv("CACHE_TTL_SECONDS", "10"))
