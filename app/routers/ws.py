@@ -1,8 +1,10 @@
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.websockets import connection_manager
 import json
-from .jobs import SESSION_CACHE
+import time # <-- Add the time module
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from app.websockets import connection_manager
+from .jobs import SESSION_CACHE, get_job_details # <-- Import get_job_details
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
@@ -12,26 +14,48 @@ async def websocket_endpoint(websocket: WebSocket, host_address: str):
     try:
         while True:
             data = await websocket.receive_text()
-            logging.info(f"Received message from {host_address}: {data}")
-            
             message = json.loads(data)
             status = message.get("status")
             job_id = message.get("job_id")
 
+            if not job_id:
+                continue
+
+            # --- UPDATED LOGIC for session_ready ---
             if status == "session_ready":
-                if job_id is not None:
+                try:
+                    # Fetch the job's on-chain details ONCE when the session starts
+                    job_details = await get_job_details(job_id)
+                    price_per_second = job_details.price_per_second
+                    
                     SESSION_CACHE[job_id] = {
                         "public_url": message.get("public_url"),
                         "token": message.get("token"),
-                        "stats": None # Initialize stats as null
+                        "stats": None,
+                        # --- NEW: Add billing and time fields ---
+                        "price_per_second": price_per_second,
+                        "session_start_time": time.time(), # Record start time as a Unix timestamp
+                        "uptime_seconds": 0,
+                        "current_cost_octas": 0,
                     }
-                    logging.info(f"Stored secure session details for job {job_id}")
-            
-            # --- NEW: Handle stats updates ---
+                    logging.info(f"Stored initial session and billing details for job {job_id}")
+                except Exception as e:
+                    logging.error(f"Could not fetch job details for {job_id} on session start: {e}")
+
+            # --- UPDATED LOGIC for stats_update ---
             elif status == "stats_update":
-                if job_id is not None and job_id in SESSION_CACHE:
-                    # Update the stats for the existing session
-                    SESSION_CACHE[job_id]["stats"] = message.get("stats")
+                if job_id in SESSION_CACHE:
+                    session = SESSION_CACHE[job_id]
+                    
+                    # Calculate uptime and current cost
+                    uptime = time.time() - session.get("session_start_time", time.time())
+                    price = session.get("price_per_second", 0)
+                    cost = int(uptime * price)
+
+                    # Update the cache with all new information
+                    session["stats"] = message.get("stats")
+                    session["uptime_seconds"] = int(uptime)
+                    session["current_cost_octas"] = cost
 
     except WebSocketDisconnect:
         connection_manager.disconnect(host_address)
