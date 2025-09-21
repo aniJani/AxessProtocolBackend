@@ -11,9 +11,11 @@ router = APIRouter(prefix="/ws", tags=["websockets"])
 
 @router.websocket("/{host_address}")
 async def websocket_endpoint(websocket: WebSocket, host_address: str):
+    # Register this host's WebSocket
     await connection_manager.connect(websocket, host_address)
     try:
         while True:
+            # Receive one message at a time
             raw = await websocket.receive_text()
             try:
                 message = json.loads(raw)
@@ -24,7 +26,7 @@ async def websocket_endpoint(websocket: WebSocket, host_address: str):
             status = message.get("status")
             job_id_raw = message.get("job_id")
 
-            # Normalize job_id (it can be 0; only skip if truly missing)
+            # Normalize job_id (it can be 0; only skip if truly missing/invalid)
             try:
                 job_id = int(job_id_raw)
             except (TypeError, ValueError):
@@ -34,30 +36,32 @@ async def websocket_endpoint(websocket: WebSocket, host_address: str):
             logging.info(f"[WS] {host_address} -> status={status} job_id={job_id}")
 
             if status == "session_ready":
-                # grab details first so we can log them
                 public_url = message.get("public_url")
                 token = message.get("token")
 
-                # 🔐 DEV LOG (contains the token/password)
+                # DEV LOG (contains token). Remove or redact in production.
                 logging.info(
                     f"[WS] session_ready: job={job_id} url={public_url} token={token}"
                 )
 
+                if not public_url or not token:
+                    logging.warning(
+                        f"[WS] session_ready missing url/token for job {job_id}: {message}"
+                    )
+                    continue
+
                 try:
-                    # Validate job exists (and warms any caches you keep)
+                    # Validate job exists (and warm caches if you have any)
                     _ = await get_job_details(job_id)
 
-                    # If you want actual price_per_second, fetch from listing; keep 0 for now
-                    price_per_second = 0
-
+                    # Store minimal session info; let HTTP layer compute billing.
                     SESSION_CACHE[job_id] = {
                         "public_url": public_url,
                         "token": token,
                         "stats": None,
-                        "price_per_second": price_per_second,
-                        "session_start_time": time.time(),
-                        "uptime_seconds": 0,
-                        "current_cost_octas": 0,
+                        # Clear any stale billing meta so jobs.py recomputes once.
+                        "_billing_meta": None,
+                        "session_start_time": int(time.time()),
                         "error": None,
                     }
                     logging.info(f"[WS] Cached session for job {job_id}")
@@ -71,17 +75,12 @@ async def websocket_endpoint(websocket: WebSocket, host_address: str):
                 session = SESSION_CACHE.get(job_id)
                 if not session:
                     logging.debug(
-                        f"[WS] Stats for unknown job {job_id}; ignoring until session_ready"
+                        f"[WS] Stats for unknown job {job_id}; waiting for session_ready."
                     )
                     continue
 
-                uptime = time.time() - session.get("session_start_time", time.time())
-                price = session.get("price_per_second", 0)
-                cost = int(uptime * price)
-
+                # Only update stats; billing is computed in GET /jobs/{id}/session
                 session["stats"] = message.get("stats")
-                session["uptime_seconds"] = int(uptime)
-                session["current_cost_octas"] = cost
 
             elif status == "session_stopped":
                 if job_id in SESSION_CACHE:
@@ -90,16 +89,13 @@ async def websocket_endpoint(websocket: WebSocket, host_address: str):
 
             elif status == "session_error":
                 err = message.get("message") or "host reported session_error"
-                # log the error loudly
                 logging.warning(f"[WS] session_error for job {job_id}: {err}")
                 SESSION_CACHE[job_id] = {
                     "public_url": None,
                     "token": None,
                     "stats": None,
-                    "price_per_second": 0,
+                    "_billing_meta": None,
                     "session_start_time": None,
-                    "uptime_seconds": 0,
-                    "current_cost_octas": 0,
                     "error": err,
                 }
 
