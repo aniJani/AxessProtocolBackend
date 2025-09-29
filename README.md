@@ -12,6 +12,9 @@ A thin caching/API layer for the marketplace dApp. Pulls data from Aptos fullnod
 ## Configure
 Copy `.env.example` to `.env` and set module addresses for Marketplace/Escrow once deployed.
 
+## Activate python environment
+source .venv/bin/activate      
+
 ## Run
 ```bash
 uvicorn app.main:app --reload --port 8000

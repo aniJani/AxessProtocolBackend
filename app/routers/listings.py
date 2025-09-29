@@ -1,15 +1,15 @@
+import logging
+import asyncio
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
-import logging
 
+# --- IMPORT THE CONNECTION MANAGER ---
+from app.websockets import connection_manager
 from app.clients.aptos import aptos_client
 from app.config import get_settings
-from app.models.schemas import Listing, ListingsPage, PhysicalSpecs, CloudDetails
+# --- Ensure your Pydantic models match the new contract ---
+from app.models.schemas import Listing, ListingsPage, PhysicalSpecs 
 from app.utils.pagination import paginate
-from app.cache.memory_cache import (
-    cache_get,
-    cache_set,
-)
 
 # Basic Logging Configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
@@ -18,116 +18,135 @@ router = APIRouter(prefix="/api/v1", tags=["listings"])
 SET = get_settings()
 
 
-def _parse_raw_listing(raw_listing: dict, host_address: str) -> Listing:
+# --- NEW PARSER for the 'ListingView' struct ---
+def _parse_listing_view(listing_view_data: dict, host_address: str) -> Listing:
     """
-    A helper function to transform raw on-chain data into our Pydantic model.
-    This version is corrected based on the actual log output.
+    A new parser for the single 'ListingView' resource model.
+    It translates the raw on-chain JSON structure into our clean Pydantic model.
     """
-    listing_type_data = raw_listing.get("listing_type", {})
-
-    listing_type = None
-    physical_details = None
-    cloud_details = None
-
-    # --- THE FIX ---
-    # 1. Get the variant name from the '__variant__' key.
+    listing_type_data = listing_view_data.get("listing_type", {})
+    
+    listing_type_str: Optional[str] = None
+    physical_details: Optional[PhysicalSpecs] = None
+    # CloudDetails would be handled similarly if you add it back to the contract
+    
     variant_name = listing_type_data.get('__variant__')
+    variant_data = listing_type_data.get('_0', {})
 
-    # 2. Check the variant name and parse the data from the '_0' key.
-    if variant_name == "Physical":
-        listing_type = "Physical"
-        # The data for the Physical variant is in the '_0' field
-        physical_data = listing_type_data.get('_0', {})
-        if physical_data:
-            physical_details = PhysicalSpecs(**physical_data)
-    elif variant_name == "Cloud":
-        listing_type = "Cloud"
-        # The data for the Cloud variant would also be in the '_0' field
-        cloud_data = listing_type_data.get('_0', {})
-        if cloud_data:
-            cloud_details = CloudDetails(**cloud_data)
-    # --- END FIX ---
+    if variant_name == "Physical" and variant_data:
+        listing_type_str = "Physical"
+        physical_details = PhysicalSpecs(**variant_data)
+    
+    if not listing_type_str:
+        raise ValueError(f"Could not parse listing_type for host {host_address}")
 
-    active_job_id_data = raw_listing.get("active_job_id", {}).get("vec", [])
-    active_job_id = int(active_job_id_data[0]) if active_job_id_data else None
+    active_job_id_vec = listing_view_data.get("active_job_id", {}).get("vec", [])
+    active_job_id = int(active_job_id_vec[0]) if active_job_id_vec else None
 
-    if not listing_type:
-        raise ValueError("Could not parse listing type from raw data")
-
+    # This assumes your Pydantic Listing model in schemas.py has been updated
+    # to match the new `Listing` struct (e.g., no `id`, has `is_rented`).
     return Listing(
-        id=int(raw_listing["id"]),
         host_address=host_address,
-        listing_type=listing_type,
-        price_per_second=int(raw_listing["price_per_second"]),
-        is_available=raw_listing["is_available"],
+        listing_type=listing_type_str,
+        price_per_second=int(listing_view_data.get("price_per_second", 0)),
+        is_available=listing_view_data.get("is_available", False),
+        is_rented=listing_view_data.get("is_rented", True), # Default to rented for safety
         active_job_id=active_job_id,
         physical=physical_details,
-        cloud=cloud_details,
+        # The ListingView doesn't expose the public key, so we can omit it or
+        # fetch the full Listing resource if needed. For the main list, this is fine.
     )
 
 
-async def _fetch_all_listings() -> List[Listing]:
+# --- REPLACED: _fetch_all_listings is now _fetch_online_listings ---
+async def _fetch_online_listings() -> List[Listing]:
     """
-    Fetches all listings by calling the `get_listings_by_host` view function
-    for a list of known hosts.
+    Fetches listings ONLY from hosts who are currently online.
+    It gets the list of online hosts from the WebSocket manager and then
+    fetches their on-chain data in parallel.
     """
-    cache_key = "all_listings_v2"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached
+    # 1. Get the list of agents that are currently connected via WebSocket. This is our liveness check.
+    online_host_addresses = list(connection_manager.active_connections.keys())
+    
+    if not online_host_addresses:
+        logging.info("No host agents are currently connected to the backend.")
+        return []
 
-    KNOWN_HOSTS = [SET.APTOS_MARKETPLACE_ADDRESS]
+    logging.info(f"Found {len(online_host_addresses)} online hosts. Fetching their on-chain listing views...")
+
+    # 2. Create a list of promises to call the `get_listing_view` function for each online host.
+    view_promises = [
+        aptos_client.view({
+            "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listing_view",
+            "type_arguments": [],
+            "arguments": [host_addr],
+        }) for host_addr in online_host_addresses
+    ]
+
+    # 3. Execute all these requests in parallel.
+    results = await asyncio.gather(*view_promises, return_exceptions=True)
+
+    # 4. Parse the results and build the final list of listings.
     items: List[Listing] = []
-
-    for host_address in KNOWN_HOSTS:
-        try:
-            payload = {
-                "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listings_by_host",
-                "type_arguments": [],
-                "arguments": [host_address],
-            }
-            host_listings_raw_payload = await aptos_client.view(payload)
-            host_listings_raw = host_listings_raw_payload[0]
-
-            for raw_listing in host_listings_raw:
-                parsed_listing = _parse_raw_listing(raw_listing, host_address)
-                items.append(parsed_listing)
-
-        except Exception as e:
-            logging.error(f"Could not fetch listings for host {host_address}", exc_info=True)
+    for i, res in enumerate(results):
+        host_address = online_host_addresses[i]
+        
+        if isinstance(res, Exception) or not res or not res[0]:
+            logging.warning(f"Could not fetch listing view for online host {host_address}. They may not be registered yet.")
             continue
 
-    cache_set(cache_key, items)
+        listing_view_data = res[0]
+        
+        # We only show listings that are both online (WebSocket connected) AND
+        # have explicitly marked themselves as available on-chain.
+        if listing_view_data.get("is_available"):
+            try:
+                parsed_listing = _parse_listing_view(listing_view_data, host_address)
+                items.append(parsed_listing)
+            except Exception as e:
+                logging.error(f"Failed to parse listing view for host {host_address}: {e}")
+    
     return items
 
 
+# --- UPDATED: The main /listings endpoint now calls the new fetching logic ---
 @router.get("/listings", response_model=ListingsPage)
 async def list_listings(
     limit: int = Query(20, ge=1, le=100), cursor: Optional[int] = Query(None)
 ):
-    """Lists all available compute listings with pagination."""
-    items = await _fetch_all_listings()
+    """
+    Lists all available and VERIFIABLY ONLINE compute listings with pagination.
+    """
+    items = await _fetch_online_listings()
     page, next_cursor = paginate(items, limit=limit, cursor=cursor)
     return ListingsPage(items=page, next_cursor=next_cursor, total=len(items))
 
 
-@router.get("/listings/{host_address}/{listing_id}", response_model=Listing)
-async def get_listing(host_address: str, listing_id: int):
+# --- REPLACED: The old get_listing endpoint is updated for the new model ---
+# It no longer needs a `listing_id`.
+@router.get("/listings/{host_address}", response_model=Listing)
+async def get_listing_by_host(host_address: str):
     """
-    Gets a single listing by its host address and ID using an efficient on-chain view function.
+    Gets the single listing view for a given host address.
     """
     try:
         payload = {
-            "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listing_by_id",
+            "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listing_view",
             "type_arguments": [],
-            "arguments": [host_address, str(listing_id)],
+            "arguments": [host_address],
         }
-        raw_listing_payload = await aptos_client.view(payload)
-        raw_listing = raw_listing_payload[0]
-        return _parse_raw_listing(raw_listing, host_address)
+        raw_listing_view_payload = await aptos_client.view(payload)
+        
+        if not raw_listing_view_payload or not raw_listing_view_payload[0]:
+            raise HTTPException(status_code=404, detail="Listing not found for this host.")
+
+        listing_view_data = raw_listing_view_payload[0]
+        return _parse_listing_view(listing_view_data, host_address)
 
     except Exception as e:
-        logging.error(f"Failed to get listing {listing_id} for host {host_address}", exc_info=True)
+        if isinstance(e, HTTPException):
+            raise e
+        logging.error(f"Failed to get listing for host {host_address}", exc_info=True)
         raise HTTPException(
-            status_code=404, detail="Listing not found or error fetching data."
+            status_code=500, detail="Error fetching listing data."
         )
