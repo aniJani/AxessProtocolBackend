@@ -1,55 +1,53 @@
 import logging
-from typing import List
 from fastapi import APIRouter, HTTPException
 
-# Import your existing components
-from app.models.schemas import Listing # We don't need HostProfile for this endpoint
+# Import the necessary components
+from app.models.schemas import Listing  # The Pydantic model for the response
 from app.clients.aptos import aptos_client
 from app.config import get_settings
-# Reuse the excellent parser from your listings router
-from .listings import _parse_raw_listing 
+
+# --- THE FIX: Import the NEW, CORRECT parser from the updated listings.py ---
+# Note: Ensure that the parser in your listings.py is named `_parse_listing_view`
+# and is available for import (i.e., not nested inside another function).
+from .listings import _parse_listing_view
 
 router = APIRouter(prefix="/api/v1", tags=["hosts"])
 SET = get_settings()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 
-@router.get("/hosts/{host_address}/listings", response_model=List[Listing])
-async def get_host_listings(host_address: str) -> List[Listing]:
+
+# --- REFACTORED: The endpoint now gets a single listing, not a list ---
+@router.get("/hosts/{host_address}", response_model=Listing)
+async def get_host_listing(host_address: str):
     """
-    Efficiently retrieves all machine listings for a specific host by calling
-    the on-chain 'get_listings_by_host' view function.
+    Gets the single, unified listing for a specific host by calling
+    the on-chain 'get_listing_view' function. This is used by the Host Dashboard.
     """
-    logging.info(f"Fetching listings for host: {host_address} using view function.")
+    logging.info(f"Fetching listing details for host: {host_address}")
     try:
-        # --- THE FIX ---
-        # Instead of client.account_resource, we use client.view, which you've
-        # proven works in your other routers.
+        # Create the payload to call the new view function from your contract
         payload = {
-            "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listings_by_host",
+            "function": f"{SET.APTOS_MARKETPLACE_ADDRESS}::marketplace::get_listing_view",
             "type_arguments": [],
-            "arguments": [host_address], # Pass the host's address to the view function
+            "arguments": [host_address],
         }
         
-        # This returns a list containing one element: the vector of listings
-        host_listings_raw_payload = await aptos_client.view(payload)
-        host_listings_raw = host_listings_raw_payload[0]
-        # --- END FIX ---
+        # Call the view function
+        response = await aptos_client.view(payload)
+
+        # The view function returns a list with one item (the ListingView struct)
+        # or an empty list if the host is not registered.
+        if not response or not response[0]:
+            raise HTTPException(status_code=44, detail="Host is not registered or has no listing.")
+
+        listing_view_data = response[0]
         
-        # Parse each raw listing using your existing helper function
-        parsed_listings = [
-            _parse_raw_listing(raw_listing, host_address) for raw_listing in host_listings_raw
-        ]
-        
-        return parsed_listings
+        # Use the correct, existing parser from listings.py to transform the data
+        return _parse_listing_view(listing_view_data, host_address)
 
     except Exception as e:
-        # If the view function fails (e.g., host has no ListingManager),
-        # it might raise an exception. We'll log it and return an empty list.
-        logging.error(f"Failed to fetch listings for host {host_address} via view function.", exc_info=True)
-        # It's better to return an empty list than a 500 error if the host simply has no listings.
-        # However, if it's a different error, a 500 might be appropriate.
-        # For a robust solution, you could inspect the error `e` more closely.
-        raise HTTPException(
-            status_code=500, 
-            detail=f"An error occurred while fetching on-chain data for host."
-        )
+        # Handle errors gracefully
+        if isinstance(e, HTTPException):
+            raise e
+        logging.error(f"Failed to fetch listing for host {host_address}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An error occurred while fetching host listing data.")
