@@ -1,5 +1,15 @@
 # AxessProtocol — FastAPI Backend
 
+This is part of a 4 repo project:
+
+SmartContracts: https://github.com/Nishan30/AxessProtocol
+
+Frontend: https://github.com/Nishan30/AxessProtocolFrontend
+
+Backend: https://github.com/aniJani/AxessProtocolBackend
+
+Oracle Agent: https://github.com/aniJani/oracleAgent
+
 A thin caching/API layer for the marketplace dApp. Pulls data from Aptos fullnode REST and exposes clean, paginated endpoints.
 
 ## Endpoints
