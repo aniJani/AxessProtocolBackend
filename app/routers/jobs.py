@@ -30,7 +30,7 @@ def _parse_raw_job(raw_job: dict) -> Job:
         job_id=int(raw_job["job_id"]),
         renter_address=raw_job["renter_address"],
         host_address=raw_job["host_address"],
-        listing_id=int(raw_job["listing_id"]),
+        # listing_id=int(raw_job["listing_id"]),
         start_time=int(raw_job["start_time"]),
         max_end_time=int(raw_job["max_end_time"]),
         total_escrow_amount=int(raw_job["total_escrow_amount"]),
