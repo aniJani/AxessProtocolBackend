@@ -79,7 +79,6 @@ class CloudDetails(BaseModel):
 
 
 class Listing(BaseModel):
-    id: int  # The unique ID of the listing per host
     host_address: str
     listing_type: str  # Will be "Physical" or "Cloud"
     price_per_second: int
