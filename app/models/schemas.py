@@ -103,7 +103,6 @@ class Job(BaseModel):
     job_id: int
     renter_address: str
     host_address: str
-    listing_id: int
     start_time: int
     max_end_time: int
     total_escrow_amount: int
